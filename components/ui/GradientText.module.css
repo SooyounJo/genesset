@@ -1,0 +1,55 @@
+.root {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: fit-content;
+  border-radius: 1.25rem;
+  font-weight: 400;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.inline {
+  border-radius: 0;
+  overflow: visible;
+  cursor: inherit;
+}
+
+.withBorder {
+  padding: 0.35rem 0.75rem;
+  backdrop-filter: blur(10px);
+  transition: box-shadow 0.5s ease-out;
+}
+
+.gradientOverlay {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.gradientOverlay::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+  border-radius: inherit;
+  background-color: transparent;
+  z-index: -1;
+}
+
+.textContent {
+  display: inline-block;
+  position: relative;
+  z-index: 2;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  font-weight: 400;
+}
+
