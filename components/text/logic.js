@@ -187,6 +187,189 @@ function pickStable(list, seedStr) {
   return list[h % list.length];
 }
 
+function pickStableColor(seedStr) {
+  const palette = [
+    "#D1D5DB", // neutral
+    "#FFFFFF",
+    "#BAF53A", // neon green
+    "#FF9FFC", // pink
+    "#5227FF", // purple
+    "#4CC9FF", // sky
+    "#F59E0B", // amber
+    "#34D399" // mint
+  ];
+  return pickStable(palette, seedStr);
+}
+
+function toEnglishNoun(kr) {
+  const k = String(kr || "").trim().replace(/\(.*?\)$/g, "");
+  if (!k) return "character";
+  const dict = {
+    햄스터: "hamster",
+    강아지: "puppy",
+    고양이: "cat",
+    고슴도치: "hedgehog",
+    공룡: "dinosaur",
+    개구리: "frog",
+    새: "bird",
+    오징어: "squid",
+    당나귀: "donkey",
+    아기: "baby",
+    사람: "person",
+    친구: "friend",
+    선인장: "cactus",
+    초콜릿: "chocolate",
+    피자: "pizza",
+    하트: "heart",
+    풍선: "balloon",
+    당고: "dango",
+    녹차: "matcha",
+    흙: "soil",
+    우산: "umbrella",
+    책: "book"
+  };
+  if (dict[k]) return dict[k];
+  if (/^[A-Za-z0-9 _-]+$/.test(k)) return k.trim();
+  return toAsciiSlug(k, "character");
+}
+
+function withArticle(nounPhrase) {
+  const n = String(nounPhrase || "").trim();
+  if (!n) return "A character";
+  const lower = n.toLowerCase();
+  const an = /^[aeiou]/.test(lower) || lower.startsWith("hour") || lower.startsWith("honest");
+  return `${an ? "An" : "A"} ${n}`;
+}
+
+function emotionEn(emotionKr) {
+  const m = {
+    행복: "happy",
+    설렘: "excited",
+    슬픔: "sad",
+    분노: "angry",
+    두려움: "scared",
+    놀람: "surprised",
+    감동: "touched",
+    지루함: "bored"
+  };
+  return m[emotionKr] || "excited";
+}
+
+function actionEn(actionKr) {
+  const m = {
+    "산책하기": "walking",
+    "주기": "giving",
+    "먹기": "eating",
+    "떨어뜨리기": "dropping",
+    "변신하기": "transforming",
+    "표현하기": "posing"
+  };
+  return m[actionKr] || "posing";
+}
+
+function buildImagePrompt({ character, emotion, action, props, fullText, seed }) {
+  // 순서: 주체 → 행동/상태 → 모습(시각특성/소품) → 결론/환경(맥락)
+  const noun = toEnglishNoun(character);
+  const subject = withArticle(noun);
+
+  const emo = emotionEn(emotion);
+  const act = actionEn(action);
+
+  const targetTransform =
+    String(fullText || "").match(/([A-Za-z0-9가-힣]+)됨/)?.[1] ||
+    String(fullText || "").match(/변신.*?([A-Za-z0-9가-힣]+)/)?.[1] ||
+    "";
+  const transformTo = targetTransform ? toEnglishNoun(targetTransform) : "";
+
+  const heldProp = (props || [])
+    .map((p) => String(p))
+    .find((p) => p && !p.includes("(날씨)") && !p.includes("(효과)") && !p.includes("(동반)"));
+  const heldPropEn = heldProp ? toEnglishNoun(heldProp.replace(/\(.*?\)/g, "")) : "";
+
+  const actionClause =
+    action === "주기" && heldPropEn
+      ? `is ${act} a ${heldPropEn} with a ${emo} expression`
+      : action === "먹기" && heldPropEn
+        ? `is ${act} a ${heldPropEn} with a ${emo} expression`
+        : action === "떨어뜨리기" && heldPropEn
+          ? `is ${act} a ${heldPropEn} with a ${emo} expression`
+          : action === "변신하기" && transformTo
+            ? `is ${act} into a ${transformTo}, with a ${emo} expression`
+            : `is ${act} with a ${emo} expression`;
+
+  const paletteByEmotion = {
+    happy: ["lime", "pastel yellow", "cream"],
+    excited: ["pink", "lavender", "sky blue"],
+    sad: ["pastel blue", "lilac gray", "mint gray"],
+    angry: ["red", "burgundy", "charcoal"],
+    scared: ["purple", "deep blue", "gray"],
+    surprised: ["lemon", "coral", "off-white"],
+    touched: ["peach", "champagne", "off-white"],
+    bored: ["beige", "light gray", "off-white"]
+  };
+  const palette = (paletteByEmotion[emo] || paletteByEmotion.excited).join(", ");
+  const material = pickStable(["glossy 3D", "jelly-like translucent", "soft rubbery", "glassy reflective"], seed);
+  const size = pickStable(["tiny", "small", "palm-sized"], seed);
+  const lighting = pickStable(["soft studio lighting", "gentle rim light", "subtle glow"], seed);
+
+  const propBits = (props || [])
+    .map((p) => String(p))
+    .filter((p) => p && !/(날씨|효과)/.test(p))
+    .slice(0, 3)
+    .map((p) => toEnglishNoun(p.replace(/\(.*?\)/g, "")));
+  const propClause = propBits.length ? `, featuring ${propBits.join(", ")}` : "";
+
+  const lookClause = `It looks ${size}, ${material}, in a ${palette} palette, with ${lighting}${propClause}.`;
+
+  const env = (() => {
+    const t = String(fullText || "");
+    if (/(비|비오)/.test(t)) return "in a rainy scene";
+    if (/(바람)/.test(t)) return "in a breezy scene";
+    if (action === "산책하기") return "on a clean sidewalk";
+    if (action === "먹기") return "at a cozy cafe";
+    if (action === "주기") return "in a warm room";
+    if (action === "변신하기") return "in a burst of sparkles";
+    if (action === "떨어뜨리기") return "mid-air, just before it hits the ground";
+    return pickStable(["on a minimal soft-gradient background", "as a cute sticker on a clean background"], seed);
+  })();
+
+  // +제목+표현어(한 단어)
+  const expressionWord = pickStable(
+    {
+      happy: ["Joy", "Gleam", "Cheer"],
+      excited: ["Spark", "Blush", "Bounce"],
+      sad: ["Gloom", "Sigh", "Drizzle"],
+      angry: ["Rage", "Blaze", "Stomp"],
+      scared: ["Shiver", "Eek", "Hush"],
+      surprised: ["Pop", "Whoa", "Zap"],
+      touched: ["Warmth", "Glow", "Heart"],
+      bored: ["Meh", "Yawn", "Dull"]
+    }[emo] || ["Spark", "Glow", "Pop"],
+    seed
+  );
+
+  const title = (() => {
+    const adj = pickStable(
+      {
+        happy: ["Smiling", "Sunny", "Bright"],
+        excited: ["Neon", "Glowing", "Sparkly"],
+        sad: ["Misty", "Quiet", "Blue"],
+        angry: ["Fiery", "Fierce", "Hot"],
+        scared: ["Shy", "Tiny", "Nervous"],
+        surprised: ["Popped", "Wide-eyed", "Sudden"],
+        touched: ["Warm", "Tender", "Soft"],
+        bored: ["Lazy", "Sleepy", "Plain"]
+      }[emo] || ["Glowing", "Neon", "Sparkly"],
+      seed
+    );
+    const base = noun.replace(/^\w/, (c) => c.toUpperCase());
+    return `${adj} ${base}`;
+  })();
+
+  const prompt = `${subject} ${actionClause}. ${lookClause} ${env}.`;
+  return { prompt, title, expressionWord };
+}
+
 function emotionCode(kr) {
   const m = {
     행복: "happy",
@@ -433,6 +616,15 @@ function analyzeSelection(selected, contextText, nickname) {
     seed: `${nickname}|${contextText}|${selected}`
   });
 
+  const promptPack = buildImagePrompt({
+    character,
+    emotion,
+    action,
+    props,
+    fullText: full,
+    seed: `${nickname}|${contextText}|${selected}`
+  });
+
   const charName = (nickname || "00").trim() || "00";
   const saveName = [
     toAsciiSlug(charName, "user"),
@@ -447,7 +639,10 @@ function analyzeSelection(selected, contextText, nickname) {
     action,
     appearance,
     props,
-    saveName
+    saveName,
+    imagePrompt: promptPack.prompt,
+    title: promptPack.title,
+    expressionWord: promptPack.expressionWord
   };
 }
 
@@ -514,6 +709,11 @@ export function useTextLogic() {
   const [nickname, setNickname] = useState("");
 
   const [messageInput, setMessageInput] = useState("");
+  const [draftSelectedTerm, setDraftSelectedTerm] = useState(null);
+  const [draftPreviewIndex, setDraftPreviewIndex] = useState(0);
+  const [draftPreviewImages, setDraftPreviewImages] = useState([]);
+  const [draftGenerateStatus, setDraftGenerateStatus] = useState("idle"); // idle | loading | done | error
+  const [draftGenerateError, setDraftGenerateError] = useState("");
   const [timeline, setTimeline] = useState(() => []);
   const [revealedCount, setRevealedCount] = useState(0);
   const [showComposer, setShowComposer] = useState(false);
@@ -522,6 +722,9 @@ export function useTextLogic() {
 
   const listRef = useRef(null);
   const introTimerRef = useRef(null);
+  const genAbortRef = useRef(null);
+  const genTimerRef = useRef(null);
+  const genSeqRef = useRef(0);
 
   useEffect(() => {
     const el = listRef.current;
@@ -532,6 +735,80 @@ export function useTextLogic() {
   const canSend = useMemo(() => messageInput.trim().length > 0, [messageInput]);
   const canProceedNickname = useMemo(() => nickname.trim().length > 0, [nickname]);
   const hasUserMessage = useMemo(() => timeline.some((m) => m.role === "user"), [timeline]);
+  const liveCandidates = useMemo(() => extractCandidates(messageInput), [messageInput]);
+  const draftPreviewColors = useMemo(() => {
+    const seed = `${nickname}|${messageInput}|${draftSelectedTerm || ""}`;
+    return [pickStableColor(`${seed}|0`), pickStableColor(`${seed}|1`)];
+  }, [nickname, messageInput, draftSelectedTerm]);
+
+  useEffect(() => {
+    if (!draftSelectedTerm) return;
+    const t = String(draftSelectedTerm);
+    if (!messageInput.includes(t)) setDraftSelectedTerm(null);
+  }, [draftSelectedTerm, messageInput]);
+
+  useEffect(() => {
+    return () => {
+      if (genAbortRef.current) genAbortRef.current.abort();
+      if (genTimerRef.current) window.clearTimeout(genTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const term = String(draftSelectedTerm || "").trim();
+    const text = String(messageInput || "");
+    if (!term || !text.trim() || !text.includes(term)) {
+      if (genAbortRef.current) genAbortRef.current.abort();
+      if (genTimerRef.current) window.clearTimeout(genTimerRef.current);
+      setDraftPreviewImages([]);
+      setDraftGenerateStatus("idle");
+      setDraftGenerateError("");
+      return;
+    }
+
+    if (genAbortRef.current) genAbortRef.current.abort();
+    const controller = new AbortController();
+    genAbortRef.current = controller;
+
+    if (genTimerRef.current) window.clearTimeout(genTimerRef.current);
+    const seq = (genSeqRef.current += 1);
+    setDraftGenerateStatus("loading");
+    setDraftGenerateError("");
+
+    genTimerRef.current = window.setTimeout(async () => {
+      try {
+        const analysis = analyzeSelection(term, text, nickname);
+        const res = await fetch("/api/comfy/generate", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            prompt: analysis.imagePrompt,
+            width: 1024,
+            height: 1024,
+            count: 2
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.detail || data?.error || "이미지 생성 실패");
+        if (seq !== genSeqRef.current) return;
+        const imgs = Array.isArray(data?.images) ? data.images.filter(Boolean) : [];
+        setDraftPreviewImages(imgs.slice(0, 2));
+        setDraftGenerateStatus("done");
+      } catch (e) {
+        if (controller.signal.aborted) return;
+        if (seq !== genSeqRef.current) return;
+        setDraftPreviewImages([]);
+        setDraftGenerateStatus("error");
+        setDraftGenerateError(String(e?.message || e));
+      }
+    }, 450);
+
+    return () => {
+      controller.abort();
+      if (genTimerRef.current) window.clearTimeout(genTimerRef.current);
+    };
+  }, [draftSelectedTerm, messageInput, nickname]);
 
   const introScript = useMemo(
     () => [
@@ -598,17 +875,51 @@ export function useTextLogic() {
     setRevealedCount(timeline.length);
   }, [showComposer, timeline.length]);
 
-  const send = () => {
+  const send = (opts = {}) => {
     const text = messageInput.trim();
     if (!text) return;
 
+    const selected = draftSelectedTerm;
+    const previewIndex = Number.isFinite(opts.previewIndex) ? opts.previewIndex : draftPreviewIndex;
+    const imagesSnapshot = Array.isArray(draftPreviewImages) ? draftPreviewImages.slice(0, 2) : [];
     setMessageInput("");
+    setDraftSelectedTerm(null);
+    setDraftPreviewIndex(0);
+    setDraftPreviewImages([]);
+    setDraftGenerateStatus("idle");
+    setDraftGenerateError("");
     const candidates = extractCandidates(text);
     const msgId = id();
-    setTimeline((prev) => [
-      ...prev,
-      { id: msgId, role: "user", type: "bubble", variant: "userWhite", text, candidates }
-    ]);
+    setTimeline((prev) => {
+      const next = [...prev, { id: msgId, role: "user", type: "bubble", variant: "userWhite", text, candidates }];
+      if (selected && String(selected).trim()) {
+        const analysis = analyzeSelection(selected, text, nickname);
+        next.push({ id: id(), role: "bot", type: "analysis", variant: "analysisWhite", analysis });
+        const seed = `${nickname}|${text}|${selected}`;
+        const colors = [pickStableColor(`${seed}|0`), pickStableColor(`${seed}|1`)];
+        next.push(
+          {
+            id: id(),
+            role: "bot",
+            type: "generatedImage",
+            src: imagesSnapshot[0] || "",
+            color: colors[0],
+            index: 0,
+            selectedIndex: previewIndex
+          },
+          {
+            id: id(),
+            role: "bot",
+            type: "generatedImage",
+            src: imagesSnapshot[1] || "",
+            color: colors[1],
+            index: 1,
+            selectedIndex: previewIndex
+          }
+        );
+      }
+      return next;
+    });
     if (!hasPickedCandidate && !guideMessageId && candidates.length) setGuideMessageId(msgId);
   };
 
@@ -685,6 +996,16 @@ export function useTextLogic() {
     showComposer,
     selectCandidate,
     guideMessageId,
+    draftSelectedTerm,
+    setDraftSelectedTerm,
+    liveCandidates,
+    draftPreviewColors,
+    draftPreviewImages,
+    draftGenerateStatus,
+    draftGenerateError,
+    draftPreviewIndex,
+    setDraftPreviewIndex,
+    completeDraftWithPreview: (idx) => send({ previewIndex: idx }),
 
     input: messageInput,
     setInput: setMessageInput,

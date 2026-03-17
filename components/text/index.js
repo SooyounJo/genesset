@@ -21,6 +21,29 @@ function candidateToPattern(candidate) {
   return escaped.replace(/\\\s+/g, "\\s+");
 }
 
+function findCandidateAtCaret(text, candidates, caretIndex) {
+  const value = String(text || "");
+  const list = (candidates || []).filter(Boolean);
+  const idx = Math.max(0, Math.min(Number(caretIndex || 0), value.length));
+  if (!value || list.length === 0) return null;
+
+  const sorted = list.slice().sort((a, b) => b.length - a.length);
+  for (const c of sorted) {
+    const pat = candidateToPattern(c);
+    if (!pat) continue;
+    const re = new RegExp(pat, "g");
+    let m;
+    // eslint-disable-next-line no-cond-assign
+    while ((m = re.exec(value))) {
+      const start = m.index;
+      const end = start + String(m[0] || "").length;
+      if (idx >= start && idx <= end) return c;
+      if (re.lastIndex === m.index) re.lastIndex += 1;
+    }
+  }
+  return null;
+}
+
 function HighlightText({ text, candidates, onPick, guide, sourceMessageId }) {
   const list = (candidates || []).filter(Boolean);
   if (!text || list.length === 0) return text;
@@ -62,6 +85,51 @@ function HighlightText({ text, candidates, onPick, guide, sourceMessageId }) {
           {p}
         </GradientText>
       </button>
+    );
+  });
+}
+
+function InputMirror({ text, candidates, selected }) {
+  const value = String(text || "");
+  const list = (candidates || []).filter(Boolean);
+  if (!value) return <span className={styles.inputMirrorText}>{value}</span>;
+  if (list.length === 0) return <span className={styles.inputMirrorText}>{value}</span>;
+
+  const normalizedMap = new Map(list.map((c) => [normalizeSpace(c), c]));
+  const pattern = list
+    .slice()
+    .sort((a, b) => b.length - a.length)
+    .map(candidateToPattern)
+    .join("|");
+  if (!pattern) return <span className={styles.inputMirrorText}>{value}</span>;
+
+  const re = new RegExp(`(${pattern})`, "g");
+  const parts = value.split(re);
+
+  return parts.map((p, idx) => {
+    const key = normalizeSpace(p);
+    const canonical = normalizedMap.get(key);
+    const hit = Boolean(canonical);
+    if (!hit) {
+      return (
+        <span key={idx} className={styles.inputMirrorText}>
+          {p}
+        </span>
+      );
+    }
+    const isSelected = canonical === selected;
+    return (
+      <span key={idx} className={isSelected ? `${styles.draftCandidate} ${styles.draftCandidateSelected}` : styles.draftCandidate}>
+        <GradientText
+          inline
+          className={styles.draftCandidateGradient}
+          colors={["#5227FF", "#FF9FFC", "#B19EEF"]}
+          animationSpeed={6}
+          pauseOnHover
+        >
+          {p}
+        </GradientText>
+      </span>
     );
   });
 }
@@ -136,9 +204,20 @@ export default function TextPage() {
     showComposer,
     selectCandidate,
     guideMessageId,
+    draftSelectedTerm,
+    setDraftSelectedTerm,
+    liveCandidates,
+    draftPreviewColors,
+    draftPreviewImages,
+    draftGenerateStatus,
+    draftGenerateError,
+    draftPreviewIndex,
+    setDraftPreviewIndex,
+    completeDraftWithPreview,
     goNext
   } = useTextLogic();
   const nicknameRef = useRef(null);
+  const composerRef = useRef(null);
 
   return (
     <main className={styles.page}>
@@ -220,6 +299,10 @@ export default function TextPage() {
                         4. 소품 및 특수 소품: {(a.props && a.props.length ? a.props.join(", ") : "-")}
                       </div>
                       <div className={styles.analysisLine}>5. 이미지 저장 이름: {a.saveName || "-"}</div>
+                      <div className={styles.analysisLine}>6. 이미지 생성 프롬프트: {a.imagePrompt || "-"}</div>
+                      <div className={styles.analysisLine}>
+                        7. 제목/표현어: {a.title || "-"} / {a.expressionWord || "-"}
+                      </div>
                     </div>
                   </div>
                 );
@@ -239,6 +322,33 @@ export default function TextPage() {
                       <div className={styles.figImageLabel}>{m.label || "예시"}</div>
                       <img className={styles.figImage} src={m.src} alt={m.label || ""} />
                       {m.reaction ? <div className={styles.figReaction}>{m.reaction}</div> : null}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (m.type === "generatedImage") {
+                const isSelected = Number(m.index) === Number(m.selectedIndex);
+                return (
+                  <div key={m.id} className={styles.introRow}>
+                    <div className={styles.introAvatar}>
+                      <img className={styles.introAvatarImg} src={AVATAR_2} alt="" />
+                    </div>
+                    <div className={styles.figImageCard}>
+                      <div className={styles.figImageLabel}>{isSelected ? "선택된 이미지" : "생성 이미지"}</div>
+                      {m.src ? (
+                        <img
+                          className={isSelected ? `${styles.figImage} ${styles.figImageSelected}` : styles.figImage}
+                          src={m.src}
+                          alt={isSelected ? "선택된 생성 이미지" : "생성 이미지"}
+                        />
+                      ) : (
+                        <div
+                          className={isSelected ? `${styles.figColorPreview} ${styles.figColorPreviewSelected}` : styles.figColorPreview}
+                          style={{ background: m.color || "#D1D5DB" }}
+                          aria-label={isSelected ? "선택된 생성 이미지" : "생성 이미지"}
+                        />
+                      )}
                     </div>
                   </div>
                 );
@@ -276,6 +386,19 @@ export default function TextPage() {
 
           {showComposer ? (
             <div className={styles.figComposer}>
+              <div className={draftSelectedTerm ? `${styles.composerPill} ${styles.composerPillActive}` : styles.composerPill}>
+                {draftSelectedTerm ? "제이모지 생성 시작" : "제이모지 생성"}
+              </div>
+              {draftGenerateStatus === "loading" ? (
+                <div className={styles.comfyHint} aria-live="polite">
+                  이미지 생성 중...
+                </div>
+              ) : null}
+              {draftGenerateStatus === "error" && draftGenerateError ? (
+                <div className={styles.comfyHintError} aria-live="polite">
+                  {draftGenerateError}
+                </div>
+              ) : null}
               <form
                 className={styles.figComposerInner}
                 onSubmit={(e) => {
@@ -283,12 +406,76 @@ export default function TextPage() {
                   send();
                 }}
               >
-                <input
-                  className={styles.figInput}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder=""
-                />
+                <div className={styles.inputWrap}>
+                  <div className={styles.draftPreviewRow} aria-label="이미지 생성 프리뷰">
+                    <button
+                      type="button"
+                      className={
+                        draftPreviewIndex === 0
+                          ? `${styles.draftPreviewBox} ${styles.draftPreviewSelected}`
+                          : styles.draftPreviewBox
+                      }
+                      style={{ background: draftPreviewColors?.[0] || "#D1D5DB" }}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setDraftPreviewIndex(0);
+                        completeDraftWithPreview(0);
+                      }}
+                      aria-label="프리뷰 1 선택"
+                    >
+                      {draftPreviewImages?.[0] ? <img className={styles.draftPreviewImg} src={draftPreviewImages[0]} alt="" /> : null}
+                      {draftGenerateStatus === "loading" ? <span className={styles.draftPreviewLoading} aria-hidden="true" /> : null}
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        draftPreviewIndex === 1
+                          ? `${styles.draftPreviewBox} ${styles.draftPreviewSelected}`
+                          : styles.draftPreviewBox
+                      }
+                      style={{ background: draftPreviewColors?.[1] || "#E5E7EB" }}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setDraftPreviewIndex(1);
+                        completeDraftWithPreview(1);
+                      }}
+                      aria-label="프리뷰 2 선택"
+                    >
+                      {draftPreviewImages?.[1] ? <img className={styles.draftPreviewImg} src={draftPreviewImages[1]} alt="" /> : null}
+                      {draftGenerateStatus === "loading" ? <span className={styles.draftPreviewLoading} aria-hidden="true" /> : null}
+                    </button>
+                  </div>
+                  <div
+                    className={styles.inputMirror}
+                    onMouseDown={(e) => {
+                      // 후보 클릭이 아닌 곳을 눌러도 입력에 포커스
+                      if (e.target.closest("button")) return;
+                      e.preventDefault();
+                      composerRef.current?.focus();
+                    }}
+                    aria-hidden="true"
+                  >
+                    <InputMirror
+                      text={input}
+                      candidates={liveCandidates}
+                      selected={draftSelectedTerm}
+                    />
+                  </div>
+                  <textarea
+                    ref={composerRef}
+                    className={styles.figTextarea}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onClick={(e) => {
+                      const el = e.currentTarget;
+                      const idx = el.selectionStart ?? 0;
+                      const term = findCandidateAtCaret(el.value, liveCandidates, idx);
+                      if (term) setDraftSelectedTerm(term);
+                    }}
+                    rows={2}
+                    spellCheck={false}
+                  />
+                </div>
                 <button className={styles.figSend} type="submit" disabled={!canSend} aria-label="전송">
                   ↗
                 </button>
